@@ -19,6 +19,11 @@ log = logging.getLogger(__name__)
 
 MAX_SPAWN_PER_CYCLE = 15
 
+# How often to scan the OS process table for foreign dead-parent orphans.
+# Orphans are a rare, non-time-critical event (leftovers from a dead prior
+# session), so a coarse cadence keeps the per-cycle cost negligible.
+ORPHAN_REAP_INTERVAL_S = 60
+
 # ---------------------------------------------------------------------------
 # Single-instance lock (Windows msvcrt)
 # ---------------------------------------------------------------------------
@@ -159,6 +164,28 @@ def _build_fleet_summary(tracker: ProcessTracker, config: FleetConfig) -> dict:
     return summary
 
 
+def _reap_orphans(
+    tracker: ProcessTracker,
+    health: HealthPoller,
+    pools: list,
+) -> list[dict]:
+    """Kill foreign dead-parent orphan workers and backdate their registry
+    rows so the deficit → spawn path rebuilds them immediately."""
+    reaped = tracker.reap_foreign_orphans(pools)
+    if reaped:
+        ids = [r["worker_id"] for r in reaped if r.get("worker_id")]
+        if ids:
+            health.mark_workers_offline(ids)
+        for r in reaped:
+            label = r.get("worker_id") or f"PID {r['pid']}"
+            log.warning(
+                "Reaped foreign orphan %s (PID %s, dead parent PID %s)",
+                label, r["pid"], r.get("ppid"),
+            )
+            add_event(f"REAPED orphan {label} (dead parent)", "warn")
+    return reaped
+
+
 # ---------------------------------------------------------------------------
 # Log pruning
 # ---------------------------------------------------------------------------
@@ -291,6 +318,7 @@ def run(config_path: str, foreground: bool = True) -> None:
     shutdown_requested = False
     config_mtime = _safe_mtime(config_path)
     last_log_prune = 0.0
+    last_orphan_reap = 0.0
     started_at = time.time()
     alive_counts: dict[str, int | None] = {}
 
@@ -350,6 +378,23 @@ def run(config_path: str, foreground: bool = True) -> None:
             active_pools.append(p)
 
         active_pool_names = {p.name for p in active_pools}
+
+        # 2.5 Reap foreign dead-parent orphans (throttled; skip when degraded).
+        # A worker whose spawner died but keeps heartbeating is counted alive by
+        # count_alive: it masks the deficit so no replacement spawns, yet can't
+        # be culled (not tracked). Killing it lets the heartbeat go stale so the
+        # normal deficit → spawn path below rebuilds it. Runs after
+        # rediscover_orphans has adopted our own lineage, so those are tracked
+        # and spared. Signatures come from ALL configured pools.
+        if (
+            not breaker.kills_suspended
+            and (time.time() - last_orphan_reap) > ORPHAN_REAP_INTERVAL_S
+        ):
+            try:
+                _reap_orphans(tracker, health, config.pools)
+            except Exception:
+                log.exception("Orphan reap cycle failed")
+            last_orphan_reap = time.time()
 
         # 3. Per-pool health check + reconciliation
         any_query_succeeded = False

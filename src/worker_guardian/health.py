@@ -132,6 +132,31 @@ class HealthPoller:
             self._close()
             return 0
 
+    def mark_workers_offline(self, worker_ids: list[str]) -> int:
+        """Backdate reaped-orphan rows so ``count_alive`` drops them immediately
+        (its freshness filter uses last_heartbeat_at, not status), turning the
+        kill into an instant deficit → respawn instead of waiting out the
+        stale threshold. Returns rowcount."""
+        if not worker_ids:
+            return 0
+        if not self.connect():
+            return 0
+        try:
+            with self._conn.cursor() as cur:  # type: ignore[union-attr]
+                cur.execute(
+                    """
+                    UPDATE llm_workers
+                       SET status = 'offline',
+                           last_heartbeat_at = NOW() - INTERVAL '1 day'
+                     WHERE worker_id = ANY(%(ids)s)
+                    """,
+                    {"ids": worker_ids},
+                )
+                return cur.rowcount
+        except (psycopg.OperationalError, psycopg.InterfaceError):
+            self._close()
+            return 0
+
     def count_alive_global(self, heartbeat_model: str, stale_seconds: int = 90) -> int | None:
         """Count alive workers for a model across ALL hosts (for status --global)."""
         if not self.connect():
