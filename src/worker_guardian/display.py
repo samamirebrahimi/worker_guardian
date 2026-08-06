@@ -26,9 +26,12 @@ WORKER_OK = "●"
 WORKER_BAD = "○"
 
 _CATEGORY_MAP = {
-    "task:browser_fetch":  ("FETCH", "Playwright", "\U0001f310"),
-    "task:scrapfly_fetch": ("FETCH", "Scrapfly",   "\U0001f310"),
-    "task:cluster_cpu":    ("CPU",   "cluster",    "⚙️"),
+    "task:browser_fetch":  ("FETCH",   "Playwright",    "\U0001f310"),  # 🌐
+    "task:scrapfly_fetch": ("FETCH",   "Scrapfly",      "\U0001f310"),  # 🌐
+    "task:cluster_cpu":    ("CPU",     "cluster",       "⚙️"),
+    "task:store_locator":  ("BROWSER", "store_locator", "\U0001f9ed"),  # 🧭 drives a browser to locate stores
+    "task:dfseo":          ("SEARCH",  "dfseo",         "\U0001f50e"),  # 🔎 SERP / search-engine data
+    "task:queue_agent":    ("SYS",     "queue_agent",   "\U0001f977"),  # 🥷 internal maintenance daemon
 }
 _DEFAULT_CATEGORY = ("LLM", None, "\U0001f9e0")
 
